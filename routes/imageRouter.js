@@ -8,20 +8,25 @@ const mongoose = require("mongoose");
 
 const fileUnlink = promisify(fs.unlink);
 
-imageRouter.post("/", upload.single("image"), async (req, res) => {
+imageRouter.post("/", upload.array("image", 5), async (req, res) => {
   try {
     if (!req.user) throw new Error("권한이 없습니다.");
-    const image = await new Image({
-      user: {
-        _id: req.user.id,
-        name: req.user.name,
-        username: req.user.username,
-      },
-      public: req.body.public,
-      key: req.file.filename,
-      originalFileName: req.file.originalname,
-    }).save();
-    res.json(image);
+    const images = await Promise.all(
+      req.files.map(async (file) => {
+        const image = await new Image({
+          user: {
+            _id: req.user.id,
+            name: req.user.name,
+            username: req.user.username,
+          },
+          public: req.body.public,
+          key: file.filename,
+          originalFileName: file.originalname,
+        }).save();
+        return image;
+      })
+    );
+    res.json(images);
   } catch (err) {
     console.log(err);
     res.status(400).json({ message: err.message });
@@ -29,8 +34,38 @@ imageRouter.post("/", upload.single("image"), async (req, res) => {
 });
 
 imageRouter.get("/", async (req, res) => {
-  const images = await Image.find({ public: true });
-  res.json(images);
+  try {
+    const { lastid } = req.query;
+    if (lastid && !mongoose.isValidObjectId(lastid))
+      throw new Error("invalid lastid");
+    const images = await Image.find(
+      lastid ? { public: true, _id: { $lt: lastid } } : { public: true }
+    )
+      .sort({
+        _id: -1,
+      })
+      .limit(8);
+    res.json(images);
+  } catch (err) {
+    console.log(err);
+    res.status(400).json({ message: err.message });
+  }
+});
+
+imageRouter.get("/:imageId", async (req, res) => {
+  try {
+    const { imageId } = req.params;
+    if (!mongoose.isValidObjectId(imageId))
+      throw new Error("잘못된 파일입니다.");
+    const image = await Image.findOne({ _id: imageId });
+    if (!image) throw new Error("해당 이미지는 존재하지 않습니다.");
+    if (!image.public && (!req.user || req.user.id !== image.user.id))
+      throw new Error("권한이 없습니다.");
+    res.json(image);
+  } catch (err) {
+    console.log(err);
+    res.status(400).json({ message: err.message });
+  }
 });
 
 imageRouter.delete("/:imageId", async (req, res) => {
@@ -66,6 +101,7 @@ imageRouter.patch("/:imageId/like", async (req, res) => {
     res.status(400).json({ message: err.message });
   }
 });
+
 imageRouter.patch("/:imageId/unlike", async (req, res) => {
   try {
     if (!req.user) throw new Error("권한이 없습니다.");
